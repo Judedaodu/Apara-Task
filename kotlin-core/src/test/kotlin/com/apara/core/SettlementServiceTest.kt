@@ -8,7 +8,6 @@ class SettlementServiceTest {
 
     @Test
     fun `ghost payment detected`() {
-        val env = MockEnvironment().withProperty("SPONSOR_HMAC_SECRET", "")
         val svc = SettlementService("", 10_000_000, 500_000, 0.0, 0)
         val req = ReceiveSubmitRequest("fp1", "t", 100, "AKN", "bank")
         assertEquals("SETTLED", svc.process(req).state)
