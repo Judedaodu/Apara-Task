@@ -156,10 +156,6 @@ Set `CORDAPP_FAILURE_RATE=1` in `.env`, restart, and call `/initialize` until ko
 
 Point `KOTLIN_CORE_URL` at `http://localhost:8081` when running go-api locally.
 
-## Evidence for submission
-
-After `docker compose up`, capture logs or `docker compose ps` showing **both services healthy** (screenshot or terminal output), as requested in the brief.
-
 ## CI
 
 GitHub Actions (on pull requests to `main`): Go lint + tests + build, Gradle build + tests, then Docker Compose smoke (health + sample `/initialize`).
