@@ -315,7 +315,7 @@ If your local machine passes Docker Compose but CI fails, compare **line endings
 
 ---
 
-## Part 9 — Operational troubleshooting (what seniors actually debug)
+## Part 9 — Operational troubleshooting
 
 | Symptom | Likely cause | What to do |
 |--------|----------------|------------|
@@ -327,20 +327,3 @@ If your local machine passes Docker Compose but CI fails, compare **line endings
 
 ---
 
-## Part 10 — Contract compliance (for your own checklist)
-
-The employer brief fixed **names** for env vars, **ports**, **paths**, and **JSON field names** on the public and internal APIs. This implementation follows those names **verbatim** for the HTTP routes and JSON bodies listed in the PDF.
-
-Implementation details not spelled out in the PDF (for example, the **HTTP header name** carrying the HMAC) are **transport choices** for the required `SPONSOR_HMAC_SECRET`. If asked in an interview, describe them as **defensive integration** between edge and core, not as a second public API contract.
-
----
-
-## Part 11 — Suggested reading order for a junior engineer
-
-1. Read **Part 1** and **Part 2** of this document (context + boxes-and-arrows).
-2. Open **`docker-compose.yml`** alongside **Part 3** (see how files map to containers).
-3. Trace **`main.go`** from `POST /initialize` to the HTTP client that calls Kotlin.
-4. Read **`SettlementService.kt`** to see pools, ghost detection, and simulated failures.
-5. Run **Part 6** on your machine and keep a **screenshot** of successful health + one successful `initialize` for submission evidence.
-
-If you understand those five layers, you can explain the project credibly in a senior-level conversation: **orchestration**, **contracts**, **failure injection**, and **operational reproducibility**.
