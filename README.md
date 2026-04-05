@@ -1,68 +1,245 @@
-# Apara — local stack (Go + Kotlin)
+# Apara — quick start
 
-Minimal **go-api** (edge) and **kotlin-core** (settlement simulation) wired for the Apara take-home: one corridor (Akin → Pawpaw), external rails mocked, shared contracts from the brief.
+Two services in Docker:
 
-For a **senior-level walkthrough** of architecture, how every folder fits together, prerequisites, and a full local runbook, read **`PROJECT_GUIDE.md`**.
+- **go-api** — you call this from outside (**port 8080**).
+- **kotlin-core** — settlement logic behind it (**port 8081**).
+
+**Docker** is enough to run everything. **Go 1.21+** and **JDK 17** (Kotlin **1.9+** via Gradle) are only needed if you run without containers.
+
+---
+
+## Run everything in ~5 minutes
+
+**1.** Start **Docker Desktop** (or Docker on Linux). Wait until it is **running**.
+
+**2.** Open the repo **root** (folder with `docker-compose.yml`):
+
+```bash
+git clone <your-repo-url>
+cd Apara
+```
+
+**3.** Create config from the template:
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell: `copy .env.example .env`
+
+**4.** Build and start (first run can take several minutes):
+
+```bash
+docker compose up --build
+```
+
+Or in the background: `docker compose up --build -d`
+
+**5.** In another terminal, same folder:
+
+```bash
+docker compose ps
+```
+
+Both services should show **`(healthy)`**.
+
+**6.** Health checks:
+
+*Mac / Linux / Git Bash:*
+
+```bash
+curl -fsS http://localhost:8080/health
+curl -fsS http://localhost:8081/actuator/health
+```
+
+*Windows PowerShell — use **`curl.exe`**:*
+```powershell
+curl.exe http://localhost:8080/health
+curl.exe http://localhost:8081/actuator/health
+```
+
+**7.** Optional — one successful payment through Go:
+
+*Windows (reliable JSON body):*
+
+```powershell
+[System.IO.File]::WriteAllText("$PWD\init.json", '{"templateId":"demo-1","amount":100,"currency":"AKN","receiverAccount":"ACC-001","senderBank":"BANK-AKIN"}')
+curl.exe -X POST http://localhost:8080/initialize -H "Content-Type: application/json" --data-binary "@$PWD\init.json"
+```
+
+*Mac / Linux:*
+
+```bash
+curl -sS -X POST http://localhost:8080/initialize \
+  -H "Content-Type: application/json" \
+  -d '{"templateId":"demo-1","amount":100,"currency":"AKN","receiverAccount":"ACC-001","senderBank":"BANK-AKIN"}'
+```
+
+You want **`IN_TRANSIT`** and a **`fingerprint`**.
+
+**Stop:** `docker compose down`
+
+---
+
+## Architecture
+
+**Simple view**
+
+```mermaid
+flowchart LR
+  You[You / curl] -->|8080| Go[go-api]
+  You -->|8081| Kt[kotlin-core]
+  Go -->|POST /core/receive-submit + HMAC| Kt
+```
+
+**Docker view**
+
+```mermaid
+flowchart TB
+  subgraph host [Your machine]
+    DC[docker compose]
+    subgraph net [Network apara-net]
+      GO[go-api published :8080]
+      KT[kotlin-core published :8081]
+    end
+  end
+  C[Caller] -->|POST /initialize GET /health| GO
+  C -->|GET /actuator/health| KT
+  GO -->|internal HTTP| KT
+```
+
+**Happy path (what happens)**
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant G as go-api
+  participant K as kotlin-core
+  C->>G: POST /initialize
+  G->>G: fingerprint, AkinNet check
+  alt AkinNet fails
+    G-->>C: 422 AKINNET_FAILURE
+  else OK
+    G->>K: POST /core/receive-submit
+    K->>K: HMAC check + rules
+    K-->>G: 200 or error
+    G-->>C: IN_TRANSIT + fingerprint if OK
+  end
+```
+
+Go and Kotlin do **not** share code — only **HTTP + JSON + `SPONSOR_HMAC_SECRET`**.
+
+---
+
+## What Compose does (order)
+
+1. Builds **kotlin-core** (Gradle `bootJar`, then small JRE image).  
+2. Builds **go-api** (static binary on Alpine).  
+3. Puts both on **`apara-net`** (`kotlin-core` and `go-api` as hostnames).  
+4. Starts Kotlin; waits until **`/actuator/health`** is OK.  
+5. Starts Go only after Kotlin is healthy.  
+6. Go’s own **`/health`** check runs in the container.
+
+Detached logs: `docker compose logs -f`
+
+---
 
 ## Prerequisites
 
-- **Go** 1.21+
-- **Kotlin** 1.9+ with **JDK** 17+ (only needed if you build `kotlin-core` outside Docker)
-- **Docker Desktop** (Compose v2)
+| Need | When |
+|------|------|
+| **Docker Desktop** (or Engine) + Compose v2 | Always, for the default flow |
+| **Go 1.21+** | Only to run `go-api` on the host |
+| **JDK 17**, Kotlin **1.9+** (via Gradle) | Only to run `kotlin-core` on the host |
 
-## Quick start (under five minutes)
+Check Docker:
 
-1. Clone the repository.
-2. Copy environment defaults and adjust if needed:
+```bash
+docker --version
+docker compose version
+```
 
-   ```bash
-   cp .env.example .env
-   ```
+---
 
-3. Start everything:
+## Repo layout
 
-   ```bash
-   docker compose up --build
-   ```
+```
+.
+├── docker-compose.yml
+├── .env.example          → copy to .env
+├── .gitattributes        → gradlew line endings for Linux CI
+├── .github/workflows/ci.yml
+├── go-api/
+│   ├── Dockerfile
+│   ├── main.go           /health, /initialize, calls Kotlin, HMAC
+│   ├── main_test.go
+│   ├── go.mod            Go 1.21
+│   └── .golangci.yml
+└── kotlin-core/
+    ├── Dockerfile
+    ├── gradlew, gradlew.bat, gradle/wrapper/
+    └── src/main/kotlin/com/apara/core/
+        ├── KotlinCoreApplication.kt
+        ├── CoreController.kt      POST /core/receive-submit
+        ├── CachedBodyFilter.kt    same bytes for JSON + HMAC
+        ├── SettlementService.kt   pools, ghost, failures
+        ├── SettlementModels.kt
+        └── ../resources/application.yml   port 8081, actuator
+```
 
-4. Wait until both services report **healthy** in `docker compose ps` (Compose waits on `kotlin-core` before starting `go-api`).
+**Go**
 
-You should see `go-api` on port **8080** and `kotlin-core` on **8081**.
+| File | Role |
+|------|------|
+| `main.go` | Routes, env, AkinNet sim, HTTP client to Kotlin, HMAC |
+| `main_test.go` | Health, 422, core down, happy path with mock server |
 
-## Service map
+**Kotlin**
 
-| Service       | Port | Role |
-|---------------|------|------|
-| **go-api**    | 8080 | Edge API: AkinNet simulation, forwards signed payloads to Kotlin. |
-| **kotlin-core** | 8081 | Spring Boot: pools, duplicate detection (“ghost” payments), Cordapp failure simulation. |
+| File | Role |
+|------|------|
+| `KotlinCoreApplication.kt` | Spring Boot start |
+| `CachedBodyFilter.kt` | Buffer body so HMAC matches parsed JSON |
+| `CoreController.kt` | Maps results to HTTP status codes |
+| `SettlementService.kt` | Business rules + simulations |
+| `application.yml` | **8081**, actuator **health** for Compose/CI |
 
-### Endpoints
-
-| Method | Path | Service | Description |
-|--------|------|---------|-------------|
-| `GET`  | `/health` | go-api | JSON: `{ "status": "ok", "service": "go-api" }` |
-| `POST` | `/initialize` | go-api | Client submit; on success returns `state: "IN_TRANSIT"`. |
-| `GET`  | `/actuator/health` | kotlin-core | Spring Actuator: `{ "status": "UP" }` (plus standard Actuator fields if enabled). |
-| `POST` | `/core/receive-submit` | kotlin-core | Internal: settlement step (HMAC-signed body from go-api). |
-
-Docker network: **`apara-net`**. Containers reach each other by DNS name (`kotlin-core`, `go-api`).
+---
 
 ## Environment variables
 
-All variables are documented in **`.env.example`** (copy to **`.env`**). Important ones:
+Names are **fixed by the brief**. Details and defaults: **`.env.example`**.
 
-- **`KOTLIN_CORE_URL`** — In Compose, `go-api` is set to `http://kotlin-core:8081` (service DNS).
-- **`SPONSOR_HMAC_SECRET`** — Shared HMAC-SHA256 secret; go-api signs the raw JSON body, kotlin-core verifies `X-Sponsor-Signature` (hex).
-- **`AKINNET_FAILURE_RATE`** — `0..1` probability that go-api returns **422** `AKINNET_FAILURE` before calling Kotlin.
-- **`CORDAPP_FAILURE_RATE`** — `0..1` probability that kotlin-core simulates a Corda/Cordapp failure (**502**).
-- **`SPONSOR_DELAY_SECONDS`** — When `> 0`, kotlin-core may return **`DELAYED`** for demo amounts (see below).
-- **`AKN_POOL_INITIAL` / `PAW_POOL_INITIAL`** — Starting simulated pool balances (minor units).
+| Variable | Role |
+|----------|------|
+| `SPONSOR_HMAC_SECRET` | Go signs outbound JSON; Kotlin checks `X-Sponsor-Signature` (hex, raw body) |
+| `KOTLIN_CORE_URL` | Kotlin base URL — **Compose sets** go-api to `http://kotlin-core:8081` (overrides `.env` for that service) |
+| `AKN_POOL_INITIAL` / `PAW_POOL_INITIAL` | Starting pool balances (minor units) |
+| `AKINNET_FAILURE_RATE` | `0..1` — Go may return **422** before calling Kotlin |
+| `SPONSOR_DELAY_SECONDS` | Kotlin **DELAYED** demo when above `0` |
+| `CORDAPP_FAILURE_RATE` | `0..1` — Kotlin may return **502** (simulated Cordapp failure) |
+
+**Load path:** `.env` at repo root → both services via `env_file`. **`docker-compose.yml` `environment:`** on go-api wins for **`KOTLIN_CORE_URL`**.
+
+---
+
+## Endpoints (contract)
+
+| Method | Path | Service | Notes |
+|--------|------|---------|--------|
+| GET | `/health` | go-api | `{"status":"ok","service":"go-api"}` |
+| POST | `/initialize` | go-api | Success → `state: "IN_TRANSIT"`, `fingerprint`, `timestamp` |
+| GET | `/actuator/health` | kotlin-core | `"status":"UP"` (+ other Actuator fields) |
+| POST | `/core/receive-submit` | kotlin-core | Internal; HMAC on exact JSON bytes |
+
+---
 
 ## Test scenarios (curl)
 
-Replace host/ports if you are not using default mapping.
+Change `.env` where noted, then `docker compose up -d --build`. Use **8080/8081** unless you remapped ports.
 
-### Happy path (client → go-api)
+### Happy path
 
 ```bash
 curl -sS -X POST http://localhost:8080/initialize \
@@ -70,25 +247,15 @@ curl -sS -X POST http://localhost:8080/initialize \
   -d '{"templateId":"t1","amount":100,"currency":"AKN","receiverAccount":"recv-1","senderBank":"bank-akin"}'
 ```
 
-Expect HTTP **200** and `state` **`IN_TRANSIT`**.
+→ **200**, `IN_TRANSIT`.
 
-### AkinNet failure (HTTP 422)
+### AkinNet failure (422)
 
-Set in `.env`:
+`.env`: `AKINNET_FAILURE_RATE=1`. Restart stack. Same POST as happy path → **422**, `AKINNET_FAILURE`. Set back to `0`.
 
-```env
-AKINNET_FAILURE_RATE=1
-```
+### Ghost payment (409)
 
-Restart the stack (`docker compose up -d --build`), then run the same `/initialize` request. Expect **422** with `error: "AKINNET_FAILURE"`.
-
-Set `AKINNET_FAILURE_RATE` back to `0` for normal operation.
-
-### Ghost payment (duplicate fingerprint)
-
-Kotlin rejects a second submit with the same `fingerprint` (double-spend). go-api always generates a new fingerprint, so exercise this **against kotlin-core** with a stable body and valid HMAC.
-
-With the default secret from `.env.example`:
+Same fingerprint twice to **Kotlin** (with HMAC from default secret):
 
 ```bash
 BODY='{"fingerprint":"ghost-demo","templateId":"t1","amount":50,"currency":"AKN","senderBank":"bank-akin"}'
@@ -105,11 +272,11 @@ curl -sS -X POST http://localhost:8081/core/receive-submit \
   -d "$BODY"
 ```
 
-The second call should return **`GHOST_DETECTED`** (HTTP **409**).
+Second call → **GHOST_DETECTED**, **409**.
 
-### Pool rejection (debit would go negative)
+### Pool rejection (409)
 
-Use an **amount larger than `AKN_POOL_INITIAL`** on a fresh stack (see `.env`), e.g.:
+Amount larger than **`AKN_POOL_INITIAL`** on a **fresh** stack:
 
 ```bash
 curl -sS -X POST http://localhost:8080/initialize \
@@ -117,11 +284,11 @@ curl -sS -X POST http://localhost:8080/initialize \
   -d "{\"templateId\":\"t2\",\"amount\":20000000,\"currency\":\"AKN\",\"receiverAccount\":\"recv-2\",\"senderBank\":\"bank-akin\"}"
 ```
 
-Expect kotlin-core to respond with **`POOL_REJECTED`** (surfaced as **409** through go-api). Pool balances stay consistent (no partial debit).
+→ **POOL_REJECTED** as **409** through go-api.
 
-### DELAYED sponsor path
+### DELAYED
 
-Ensure **`SPONSOR_DELAY_SECONDS`** is **greater than 0** in `.env` (default `60`). Submit an amount divisible by **1_000_000** (e.g. `1000000`):
+`SPONSOR_DELAY_SECONDS` above `0` (default `60`). Amount divisible by **1_000_000**:
 
 ```bash
 curl -sS -X POST http://localhost:8080/initialize \
@@ -129,33 +296,92 @@ curl -sS -X POST http://localhost:8080/initialize \
   -d '{"templateId":"t-delay","amount":1000000,"currency":"AKN","receiverAccount":"recv-3","senderBank":"bank-akin"}'
 ```
 
-kotlin-core returns **`DELAYED`** for that pattern (no long sleep; suitable for CI and local demos). The PDF also mentions tuning **`SPONSOR_DELAY_SECONDS`** when exploring timing behaviour (e.g. raising it for manual experiments).
+You can raise **`SPONSOR_DELAY_SECONDS`** to experiment with timing (per brief).
 
-### Cordapp failure (simulated)
+### Cordapp failure (502)
 
-Set `CORDAPP_FAILURE_RATE=1` in `.env`, restart, and call `/initialize` until kotlin-core returns **502** (probabilistic). Set back to `0` afterwards.
+`CORDAPP_FAILURE_RATE=1`, restart, call `/initialize` until **502** (random). Set `0` after.
+
+---
+
+## Run without Docker
+
+**1 — Kotlin**
+
+```bash
+cd kotlin-core && ./gradlew bootRun
+```
+
+Windows: `gradlew.bat bootRun` — wait for **8081**.
+
+**2 — Go** (other terminal)
+
+```bash
+cd go-api
+export KOTLIN_CORE_URL=http://localhost:8081
+export SPONSOR_HMAC_SECRET=dev-secret-change-in-prod
+go run .
+```
+
+Windows PowerShell:
+
+```powershell
+cd go-api
+$env:KOTLIN_CORE_URL="http://localhost:8081"
+$env:SPONSOR_HMAC_SECRET="dev-secret-change-in-prod"
+go run .
+```
+
+---
+
+## CI (GitHub Actions)
+
+Runs on **pull requests to `main`**.
+
+```mermaid
+flowchart LR
+  G[go: tidy lint test build]
+  K[kotlin: Gradle build test]
+  I[integration: compose smoke]
+  G --> I
+  K --> I
+```
+
+| Job | What it runs |
+|-----|----------------|
+| go | `go mod tidy`, golangci-lint, `go test ./...`, `go build` |
+| kotlin | JDK 17, `./gradlew build test` |
+| integration | `cp .env.example .env`, `docker compose up -d --build`, wait **8080/health** + **8081/actuator/health**, `POST /initialize`, `docker compose down -v` |
+
+Local OK but CI fails? Check **`gradlew` LF** (`.gitattributes`), Dockerfile paths, ports **8080/8081**.
+
+---
 
 ## Troubleshooting
 
-1. **`docker compose up` hangs or go-api never starts**  
-   **Cause:** `kotlin-core` health check failing (Kotlin/JVM still starting, or port conflict).  
-   **Fix:** Run `docker compose logs -f kotlin-core`, wait for Spring to finish startup; ensure port **8081** is free on the host. Increase `start_period` in `docker-compose.yml` if your machine is slow.
+**Three common issues (brief):**
 
-2. **`/initialize` returns 401 / invalid signature**  
-   **Cause:** `SPONSOR_HMAC_SECRET` mismatch between go-api and kotlin-core, or manual curls to kotlin-core without a correct `X-Sponsor-Signature`.  
-   **Fix:** Use the same secret in `.env` for both services; for direct kotlin-core calls, compute the HMAC over the **exact** JSON bytes (see ghost example).
+1. **Compose stuck / go-api not up** — Kotlin still starting or **8081** busy. `docker compose logs -f kotlin-core`; wait; bump `start_period` in compose if needed.  
+2. **`/initialize` → 401** — Wrong or mismatched **`SPONSOR_HMAC_SECRET`**; manual Kotlin curls must HMAC the **exact** JSON bytes.  
+3. **Connection refused** — Containers not running. `docker compose ps`; republish **8080/8081** if you changed `ports:`.
 
-3. **`connection refused` to localhost ports**  
-   **Cause:** Containers not running, or wrong host (e.g. calling from another machine without port publishing).  
-   **Fix:** `docker compose ps`; confirm ports `8080:8080` and `8081:8081`; restart with `docker compose up -d`.
+**More**
 
-## Development (without Docker)
+| Symptom | Likely cause | Fix |
+|---------|----------------|-----|
+| Cannot connect to Docker daemon | Engine off | Start Docker |
+| go-api restart loop | Kotlin never healthy | Logs for kotlin-core; JVM errors |
+| `/initialize` → 502 | Cordapp sim | `CORDAPP_FAILURE_RATE=0` or retry |
+| Port in use | Other app | Stop it or change left side of `ports:` in compose |
+| Kotlin CI fails on Linux | CRLF in `gradlew` | `.gitattributes` → `kotlin-core/gradlew` **LF** |
+| Windows curl odd | Wrong tool | Use **`curl.exe`** |
 
-- **go-api:** `cd go-api && go run .`
-- **kotlin-core:** `cd kotlin-core && ./gradlew bootRun` (Unix) or `gradlew.bat bootRun` (Windows)
+---
 
-Point `KOTLIN_CORE_URL` at `http://localhost:8081` when running go-api locally.
+## Evidence for submission (PDF)
 
-## CI
+Screenshot or terminal output: **`docker compose`** finished with **both services healthy** (e.g. `docker compose ps` with **`(healthy)`**). Add health curls and **`IN_TRANSIT`** if you want extra proof.
 
-GitHub Actions (on pull requests to `main`): Go lint + tests + build, Gradle build + tests, then Docker Compose smoke (health + sample `/initialize`).
+---
+
+Take-home simulation only — not a hardened production setup.
