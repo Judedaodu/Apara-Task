@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache-dependency-path: go-api/go.mod
+
+      - name: Tidy module
+        run: go mod tidy
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59.1
+          working-directory: go-api
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build -o /tmp/go-api .
+
+  kotlin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kotlin-core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('kotlin-core/**/*.gradle*', 'kotlin-core/gradle/wrapper/**') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build and test
+        run: ./gradlew build test --no-daemon
+
+  integration:
+    needs:
+      - go
+      - kotlin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: cp .env.example .env
+
+      - name: Start stack
+        run: docker compose up -d --build
+
+      - name: Wait for health
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1 && curl -fsS http://localhost:8081/actuator/health >/dev/null 2>&1; then
+              echo "both services healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "health checks timed out"
+          docker compose ps
+          docker compose logs --no-color
+          exit 1
+
+      - name: Smoke (curl)
+        run: |
+          set -euo pipefail
+          curl -fsS http://localhost:8080/health
+          echo ""
+          curl -fsS http://localhost:8081/actuator/health
+          echo ""
+
+      - name: Smoke (initialize)
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST http://localhost:8080/initialize \
+            -H "Content-Type: application/json" \
+            -d '{"templateId":"ci","amount":100,"currency":"AKN","receiverAccount":"recv","senderBank":"send"}'
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v

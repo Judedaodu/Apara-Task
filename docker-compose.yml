@@ -1,0 +1,41 @@
+services:
+  kotlin-core:
+    build:
+      context: ./kotlin-core
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    networks:
+      - apara-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  go-api:
+    build:
+      context: ./go-api
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      KOTLIN_CORE_URL: http://kotlin-core:8081
+    depends_on:
+      kotlin-core:
+        condition: service_healthy
+    networks:
+      - apara-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+networks:
+  apara-net:
+    name: apara-net
